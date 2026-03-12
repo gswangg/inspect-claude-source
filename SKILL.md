@@ -17,7 +17,7 @@ VERSION=$(basename "$(readlink ~/.local/bin/claude)")
 
 ## Step 2: Extract source (if not already done)
 
-Check if `/tmp/claude-source/$VERSION/claude.js` exists. If not, run the extraction script bundled with this skill:
+Check if `/tmp/claude-source/$VERSION/src/entrypoints/cli.js` exists. If not, run the extraction script bundled with this skill:
 
 ```bash
 python3 ~/.claude/skills/inspect-claude-source/extract.py --text-only
@@ -40,21 +40,22 @@ Options:
 
 ## Step 3: Search or read the source
 
-The main source file is `/tmp/claude-source/<version>/claude.js` (~520K lines prettified).
+The main source file is `/tmp/claude-source/<version>/src/entrypoints/cli.js` (~575K lines prettified).
 
 Other extracted modules:
-- `ripgrep.js` - Native ripgrep addon wrapper
 - `image-processor.js` - Image processing addon wrapper
 - `file-index.js` - File indexing addon wrapper
 - `color-diff.js` - Color diff addon wrapper
+- `audio-capture.js` - Audio capture addon wrapper
+- `tree-sitter-bash.js` - Tree-sitter bash parser wrapper
 
 If the user provided a search term (`$ARGUMENTS`), search for it:
 
 ```bash
-grep -n "$ARGUMENTS" /tmp/claude-source/$VERSION/claude.js | head -50
+grep -n "$ARGUMENTS" /tmp/claude-source/$VERSION/src/entrypoints/cli.js | head -50
 ```
 
-For broader exploration, use the Grep tool against `/tmp/claude-source/<version>/claude.js`.
+For broader exploration, use the Grep tool against `/tmp/claude-source/<version>/src/entrypoints/cli.js`.
 
 ## Tips for reading the source
 
@@ -63,6 +64,7 @@ For broader exploration, use the Grep tool against `/tmp/claude-source/<version>
 - String literals are preserved verbatim — search for user-facing strings, CLI flag names, error messages, and event type names to find relevant code.
 - The code uses CommonJS (`require`, `module.exports`) wrapped in Bun's CJS shim.
 - Look for patterns like `type: "assistant"`, `type: "result"`, `type: "system"` to find event handling code.
+- **Export maps for readable names**: Each module has an export registration call that maps readable names to mangled identifiers, e.g. `uR(_IB, { writeToMailbox: () => o8, readMailbox: () => Yp, ... })`. Search for a readable name you expect (from log messages or docs) to find its mangled symbol, then trace that symbol through the code. **Caveat**: The export helper name (e.g. `uR`) and map structure are artifacts of the minifier and may change between versions — re-discover the pattern each time rather than assuming stability.
 
 ## Binary structure reference
 
@@ -79,3 +81,7 @@ Claude Code is a Bun-compiled single-file executable (Mach-O on macOS):
 ```
 
 The extraction uses `otool -l` to find the `__BUN/__bun` section offset and size, then parses the footer to locate module boundaries. This is stable across versions since it relies on the Mach-O segment/section structure rather than hardcoded byte offsets.
+
+## Prior analysis notes
+
+See `~/code/claude-code-internals/` for detailed analyses of specific subsystems. These are version-tagged notes from previous source inspections. Consult them for context before re-analyzing a subsystem that may already be documented.

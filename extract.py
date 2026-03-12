@@ -8,10 +8,9 @@ Usage:
     python3 scripts/extract-claude-source.py [--output-dir DIR] [--binary PATH]
 
 Output:
-    <output-dir>/<version>/claude.js          - main source (prettified)
-    <output-dir>/<version>/ripgrep.js         - native addon wrapper
-    <output-dir>/<version>/image-processor.js - native addon wrapper
-    <output-dir>/<version>/...                - other embedded modules
+    <output-dir>/<version>/src/entrypoints/cli.js - main source (prettified)
+    <output-dir>/<version>/image-processor.js     - native addon wrapper
+    <output-dir>/<version>/...                    - other embedded modules
 
 Requires: otool (macOS), bunx/prettier (for prettification)
 """
@@ -288,8 +287,11 @@ def main():
                 print("FAILED (prettier not found)")
                 break
 
+    # Find the main source file (largest text module)
+    main_source = max(text_modules, key=lambda p: p.stat().st_size) if text_modules else None
     print(f"\nExtracted to: {out_dir}")
-    print(f"Main source: {out_dir}/claude.js")
+    if main_source:
+        print(f"Main source: {main_source}")
 
 
 if __name__ == "__main__":
