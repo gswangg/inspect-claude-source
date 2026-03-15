@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
-"""Extract and prettify Claude Code source from its Bun-compiled binary.
+"""Extract and format Claude Code source from its Bun-compiled binary.
 
-Produces a versioned directory of prettified JS source files extracted
-from the Claude Code binary at ~/.local/bin/claude.
+Works on both macOS (Mach-O) and Linux (ELF). Produces a versioned directory
+of formatted JS source files extracted from the Claude Code binary at
+~/.local/bin/claude.
 
 Usage:
-    python3 scripts/extract-claude-source.py [--output-dir DIR] [--binary PATH]
+    python3 extract.py [--output-dir DIR] [--binary PATH] [--text-only]
 
 Output:
-    <output-dir>/<version>/claude.js          - main source (prettified)
+    <output-dir>/<version>/claude.js          - main source (formatted)
     <output-dir>/<version>/ripgrep.js         - native addon wrapper
     <output-dir>/<version>/image-processor.js - native addon wrapper
     <output-dir>/<version>/...                - other embedded modules
-
-Requires: otool (macOS), bunx/prettier (for prettification)
 """
 
 import argparse
 import os
-import shutil
+import platform
+import re
 import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 BUN_TRAILER = b"\n---- Bun! ----\n"
@@ -38,8 +39,8 @@ def resolve_binary(binary_path: Path) -> tuple[Path, str]:
     return resolved, version
 
 
-def get_bun_section(binary_path: Path) -> tuple[int, int]:
-    """Get offset and size of __BUN/__bun Mach-O section."""
+def find_bun_section_macos(binary_path: Path) -> tuple[int, int]:
+    """Find Bun section via otool (macOS Mach-O __BUN/__bun section)."""
     result = subprocess.run(
         ["otool", "-l", str(binary_path)], capture_output=True, text=True
     )
@@ -67,11 +68,48 @@ def get_bun_section(binary_path: Path) -> tuple[int, int]:
     sys.exit("__BUN/__bun section not found in Mach-O binary")
 
 
+def find_bun_section_linux(binary_path: Path) -> tuple[int, int]:
+    """Find Bun section by searching for the trailer at EOF (Linux ELF).
+
+    On Linux, Bun appends the StandaloneModuleGraph data at the end of
+    the file. We find the trailer, read the 32-byte footer to get
+    offset_byte_count, and compute section boundaries backwards.
+    """
+    file_size = binary_path.stat().st_size
+
+    with open(binary_path, "rb") as f:
+        read_size = min(file_size, 1024)
+        f.seek(file_size - read_size)
+        tail = f.read(read_size)
+
+        trailer_idx = tail.rfind(BUN_TRAILER)
+        if trailer_idx < 0:
+            sys.exit("Bun trailer not found in binary")
+
+        trailer_abs = (file_size - read_size) + trailer_idx
+        section_end = trailer_abs + len(BUN_TRAILER)
+
+        f.seek(trailer_abs - 32)
+        footer_data = f.read(32)
+
+        offset_byte_count = struct.unpack_from("<I", footer_data, 0)[0]
+        section_start = section_end - offset_byte_count - 48
+
+    section_size = section_end - section_start
+    return section_start, section_size
+
+
+def find_bun_section(binary_path: Path) -> tuple[int, int]:
+    """Find the Bun module data section, auto-detecting platform."""
+    if platform.system() == "Darwin":
+        return find_bun_section_macos(binary_path)
+    return find_bun_section_linux(binary_path)
+
+
 def parse_footer(section: bytes) -> dict:
     """Parse the Bun StandaloneModuleGraph footer from the section data."""
     section_size = len(section)
 
-    # Verify trailer at end of section
     trailer = section[section_size - len(BUN_TRAILER) :]
     assert trailer == BUN_TRAILER, f"Trailer mismatch: {trailer!r}"
 
@@ -93,7 +131,6 @@ def extract_modules(section: bytes, footer: dict) -> list[dict]:
     modules_end = modules_start + footer["modules_ptr_offset"]
     metadata_start = modules_end
 
-    # Determine chunk size: try 52 first (modern format), then 28, 32
     modules_ptr_length = footer["modules_ptr_length"]
     chunk_size = None
     for cs in (52, 28, 32):
@@ -136,7 +173,6 @@ def extract_modules(section: bytes, footer: dict) -> list[dict]:
                 "utf-8", errors="replace"
             )
 
-        # Strip bunfs root prefix
         for prefix in ("/$bunfs/root/", "/$bunfs/root"):
             if path.startswith(prefix):
                 path = path[len(prefix) :]
@@ -147,7 +183,8 @@ def extract_modules(section: bytes, footer: dict) -> list[dict]:
 
         contents = section[contents_off : contents_off + contents_len]
         is_text = (
-            sum(1 for b in contents[:1000] if 32 <= b < 127 or b in (9, 10, 13))
+            len(contents) > 0
+            and sum(1 for b in contents[:1000] if 32 <= b < 127 or b in (9, 10, 13))
             > 900
         )
 
@@ -171,15 +208,27 @@ def strip_bytecode_prefix(contents: bytes) -> bytes:
         return contents
 
     js = contents[pos + len(marker) :]
-    # Skip any leading non-printable bytes
     i = 0
     while i < len(js) and js[i] < 32 and js[i] not in (9, 10, 13):
         i += 1
     return js[i:]
 
 
-def prettify(file_path: Path) -> bool:
-    """Run prettier on a JS file. Returns True on success."""
+def fast_format(src: str) -> str:
+    """Fast regex-based JS formatter. Adds newlines at statement boundaries.
+
+    No indentation, but puts each statement on its own line.
+    ~250ms for 11MB vs ~3min for prettier.
+    """
+    src = re.sub(r";(?!\s*\n)", ";\n", src)
+    src = re.sub(r"\{(?!\s*\n)", "{\n", src)
+    src = re.sub(r"(?<!\n)\}", "\n}", src)
+    src = re.sub(r"\}(?!\s*[\n;,).])", "}\n", src)
+    return src
+
+
+def prettify_prettier(file_path: Path) -> bool:
+    """Run prettier on a JS file via bunx. Returns True on success."""
     for cmd in ("bunx", os.path.expanduser("~/.bun/bin/bunx")):
         try:
             result = subprocess.run(
@@ -197,7 +246,7 @@ def prettify(file_path: Path) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract and prettify Claude Code source from its binary."
+        description="Extract and format Claude Code source from its binary."
     )
     parser.add_argument(
         "--binary",
@@ -212,9 +261,14 @@ def main():
         help=f"Output directory (default: {DEFAULT_OUTPUT})",
     )
     parser.add_argument(
-        "--no-prettify",
+        "--no-format",
         action="store_true",
-        help="Skip prettification step",
+        help="Skip formatting step entirely",
+    )
+    parser.add_argument(
+        "--pretty",
+        action="store_true",
+        help="Use prettier for full prettification (slower, needs bunx)",
     )
     parser.add_argument(
         "--text-only",
@@ -223,32 +277,30 @@ def main():
     )
     args = parser.parse_args()
 
-    # Resolve binary and version
+    t_start = time.time()
+
     resolved, version = resolve_binary(args.binary)
     print(f"Binary: {resolved}")
     print(f"Version: {version}")
+    print(f"Platform: {platform.system()}")
 
-    # Output directory
     out_dir = args.output_dir / version
     if out_dir.exists():
         print(f"Output already exists: {out_dir}")
         print("Remove it first to re-extract, or use a different --output-dir")
         sys.exit(0)
 
-    # Read __bun section
-    sec_offset, sec_size = get_bun_section(resolved)
-    print(f"__bun section: offset={sec_offset}, size={sec_size:,} bytes")
+    sec_offset, sec_size = find_bun_section(resolved)
+    print(f"Bun section: offset={sec_offset}, size={sec_size:,} bytes")
 
     with open(resolved, "rb") as f:
         f.seek(sec_offset)
         section = f.read(sec_size)
 
-    # Parse footer and extract modules
     footer = parse_footer(section)
     modules = extract_modules(section, footer)
     print(f"Found {len(modules)} modules")
 
-    # Write modules to disk
     out_dir.mkdir(parents=True, exist_ok=True)
     text_modules = []
 
@@ -259,11 +311,9 @@ def main():
         path = mod["path"]
         contents = mod["contents"]
 
-        # Strip bytecode prefix from text modules
         if mod["is_text"]:
             contents = strip_bytecode_prefix(contents)
 
-        # Ensure .js extension for text modules
         if mod["is_text"] and not path.endswith(".js"):
             path = path + ".js"
 
@@ -277,19 +327,31 @@ def main():
         if mod["is_text"]:
             text_modules.append(out_path)
 
-    # Prettify text modules
-    if not args.no_prettify and text_modules:
-        print("\nPrettifying JS modules...")
-        for path in text_modules:
-            print(f"  {path.name}...", end=" ", flush=True)
-            if prettify(path):
-                print("done")
-            else:
-                print("FAILED (prettier not found)")
-                break
+    # Free section memory before formatting
+    del section
 
+    if not args.no_format and text_modules:
+        if args.pretty:
+            print("\nPrettifying JS modules with prettier...")
+            for path in text_modules:
+                print(f"  {path.name}...", end=" ", flush=True)
+                if prettify_prettier(path):
+                    print("done")
+                else:
+                    print("FAILED (prettier/bunx not found)")
+                    break
+        else:
+            print(f"\nFormatting {len(text_modules)} modules (fast mode)...")
+            for path in text_modules:
+                src = path.read_text(errors="replace")
+                formatted = fast_format(src)
+                path.write_text(formatted)
+            print("  done")
+
+    elapsed = time.time() - t_start
     print(f"\nExtracted to: {out_dir}")
-    print(f"Main source: {out_dir}/claude.js")
+    print(f"Main source: {out_dir}/src/entrypoints/cli.js")
+    print(f"Completed in {elapsed:.1f}s")
 
 
 if __name__ == "__main__":
