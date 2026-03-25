@@ -32,8 +32,7 @@ python3 extract.py [OPTIONS]
 | Flag | Description |
 |---|---|
 | `--text-only` | Skip binary modules (`.node`, `.wasm`) when extracting Bun builds |
-| `--no-format` | Skip formatting entirely |
-| `--pretty` | Use prettier via `bunx` for full prettification |
+| `--pretty` | Use prettier via `bunx` for full prettification instead of fast newline formatting |
 | `--binary PATH` | Use a different Claude executable or `cli.js` |
 | `--output-dir DIR` | Change output directory (default: `/tmp/claude-source`) |
 | `--print-version` | Print the resolved Claude Code version and exit |
@@ -85,7 +84,7 @@ Claude will resolve the current install, extract or stage the source if needed, 
 2. Detects the Claude Code version from package metadata when possible
 3. If the install is a readable `cli.js` bundle, stages it directly to `/tmp/claude-source/<version>/src/entrypoints/cli.js`
 4. If the install is a Bun-compiled binary, parses the embedded `StandaloneModuleGraph` and extracts modules
-5. Optionally formats the resulting JS for easier reading
+5. Formats the resulting JS for easier reading by default using fast newline insertion, or prettier with `--pretty`
 6. Reuses the staged output on later runs
 
 ## Reverse-engineering tips

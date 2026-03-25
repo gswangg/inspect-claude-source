@@ -34,13 +34,12 @@ The script auto-detects the install type and:
 2. Detects the installed version from Claude Code package metadata when available
 3. If Claude is a bundled `cli.js`, stages it directly to `/tmp/claude-source/<version>/src/entrypoints/cli.js`
 4. If Claude is a Bun-compiled binary, locates the embedded Bun module graph and extracts modules
-5. Optionally formats the resulting JS for easier reading
+5. Formats the resulting JS for easier reading by default using fast newline insertion, or prettier with `--pretty`
 6. Saves everything to `/tmp/claude-source/<version>/`
 7. Skips work if that version is already present
 
 Options:
 - `--text-only` - skip binary modules (`.node`, `.wasm`) when extracting Bun builds
-- `--no-format` - skip formatting step entirely
 - `--pretty` - use prettier via `bunx` for full prettification (slower)
 - `--binary PATH` - inspect a different Claude executable or `cli.js`
 - `--output-dir DIR` - change output directory (default: `/tmp/claude-source`)

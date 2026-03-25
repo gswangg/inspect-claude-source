@@ -345,11 +345,6 @@ def main():
         help=f"Output directory (default: {DEFAULT_OUTPUT})",
     )
     parser.add_argument(
-        "--no-format",
-        action="store_true",
-        help="Skip formatting step entirely",
-    )
-    parser.add_argument(
         "--pretty",
         action="store_true",
         help="Use prettier for full prettification (slower, needs bunx)",
@@ -395,19 +390,18 @@ def main():
     if is_probably_text_js(resolved):
         print("Install type: bundled JavaScript (staging cli.js directly)")
         stage_js_bundle(resolved, out_dir, package_root)
-        if not args.no_format:
-            target = out_dir / "src" / "entrypoints" / "cli.js"
-            if args.pretty:
-                print("Prettifying cli.js with prettier...")
-                if prettify_prettier(target):
-                    print("  done")
-                else:
-                    print("  FAILED (prettier/bunx not found)")
-            else:
-                print("Formatting cli.js (fast mode)...")
-                src = target.read_text(errors="replace")
-                target.write_text(fast_format(src))
+        target = out_dir / "src" / "entrypoints" / "cli.js"
+        if args.pretty:
+            print("Prettifying cli.js with prettier...")
+            if prettify_prettier(target):
                 print("  done")
+            else:
+                print("  FAILED (prettier/bunx not found)")
+        else:
+            print("Formatting cli.js (fast mode)...")
+            src = target.read_text(errors="replace")
+            target.write_text(fast_format(src))
+            print("  done")
 
         elapsed = time.time() - t_start
         print(f"\nStaged to: {out_dir}")
@@ -454,7 +448,7 @@ def main():
 
     del section
 
-    if not args.no_format and text_modules:
+    if text_modules:
         if args.pretty:
             print("\nPrettifying JS modules with prettier...")
             for path in text_modules:
