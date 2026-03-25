@@ -1,21 +1,23 @@
 # inspect-claude-source
 
-Extract, prettify, and search [Claude Code](https://claude.ai/code)'s JavaScript source from its Bun-compiled binary.
+Extract or stage [Claude Code](https://claude.ai/code)'s JavaScript source from the installed CLI so you can inspect internals and reverse engineer features.
 
-Claude Code ships as a single Mach-O executable built with [Bun's single-file bundler](https://bun.sh/docs/bundler/executables). This tool parses the binary's embedded module graph, extracts the JS source files, and prettifies them so you can read, grep, and understand how Claude Code works internally.
+This works across common install layouts:
+- **Bun-compiled single-file builds**: extract embedded modules from the binary
+- **npm-installed bundles**: stage the installed `cli.js` directly into a stable versioned path
 
 ## Purpose
 
 - Explore Claude Code internals to understand how features are implemented
-- Search for specific behaviors, event types, CLI flags, or error messages
-- Works as a standalone script or as a [Claude Code skill](https://docs.anthropic.com/en/docs/claude-code/skills) (`/inspect-claude-source`)
+- Trace specific behaviors, event types, CLI flags, settings, prompts, or error messages
+- Build a reusable reverse-engineering workflow for future Claude Code work
+- Use as a Claude Code skill via `/inspect-claude-source`
 
 ## Prerequisites
 
-- **macOS** (the binary is Mach-O; `otool` is used for section parsing)
 - **Python 3.10+**
-- **Claude Code** installed at `~/.local/bin/claude` (the default install location)
-- **Bun** with `prettier` available via `bunx` (for prettification; optional with `--no-prettify`)
+- **Claude Code** installed and reachable via `claude` in `PATH` (or pass `--binary PATH`)
+- **Bun** with `prettier` available via `bunx` for `--pretty` formatting (optional)
 
 ## Usage
 
@@ -29,68 +31,70 @@ python3 extract.py [OPTIONS]
 
 | Flag | Description |
 |---|---|
-| `--text-only` | Skip binary modules (`.node`, `.wasm`) |
-| `--no-prettify` | Skip prettier formatting (faster, but harder to read) |
-| `--binary PATH` | Use a different binary path (default: `~/.local/bin/claude`) |
+| `--text-only` | Skip binary modules (`.node`, `.wasm`) when extracting Bun builds |
+| `--no-format` | Skip formatting entirely |
+| `--pretty` | Use prettier via `bunx` for full prettification |
+| `--binary PATH` | Use a different Claude executable or `cli.js` |
 | `--output-dir DIR` | Change output directory (default: `/tmp/claude-source`) |
+| `--print-version` | Print the resolved Claude Code version and exit |
+| `--print-binary` | Print the resolved Claude Code path and exit |
 
-### Output
+## Output
 
-Files are extracted to `<output-dir>/<version>/`:
+Files are written to:
 
-| File | Description |
-|---|---|
-| `claude.js` | Main source (~520K lines prettified) |
-| `ripgrep.js` | Native ripgrep addon wrapper |
-| `image-processor.js` | Image processing addon wrapper |
-| `file-index.js` | File indexing addon wrapper |
-| `color-diff.js` | Color diff addon wrapper |
-
-### As a Claude Code skill
-
-Copy the `SKILL.md` and `extract.py` to `~/.claude/skills/inspect-claude-source/`, then invoke with:
-
+```text
+<output-dir>/<version>/
 ```
+
+Primary file:
+
+```text
+<output-dir>/<version>/src/entrypoints/cli.js
+```
+
+For npm-installed bundles, the staged output may also include:
+- `package.json`
+- `README.md`
+- `LICENSE.md`
+- `sdk-tools.d.ts`
+- `vendor/`
+- `INSTALL_ROOT.txt`
+
+For Bun-compiled builds, extracted modules are written under their embedded paths.
+
+## As a Claude Code skill
+
+Copy this directory to:
+
+```bash
+~/.claude/skills/inspect-claude-source/
+```
+
+Then invoke:
+
+```text
 /inspect-claude-source [search-term]
 ```
 
-Claude will extract the source (if needed), then search or explore based on your query.
+Claude will resolve the current install, extract or stage the source if needed, and then search/read it.
 
 ## How it works
 
-1. Follows the `~/.local/bin/claude` symlink to determine the installed version
-2. Uses `otool -l` to locate the `__BUN/__bun` Mach-O section (no hardcoded offsets)
-3. Parses the Bun `StandaloneModuleGraph` footer to find module boundaries
-4. Extracts all embedded JS modules and strips bytecode prefixes
-5. Prettifies with prettier via `bunx`
-6. Saves to `/tmp/claude-source/<version>/` (skips re-extraction if already present)
+1. Resolves `claude` from `PATH` by default
+2. Detects the Claude Code version from package metadata when possible
+3. If the install is a readable `cli.js` bundle, stages it directly to `/tmp/claude-source/<version>/src/entrypoints/cli.js`
+4. If the install is a Bun-compiled binary, parses the embedded `StandaloneModuleGraph` and extracts modules
+5. Optionally formats the resulting JS for easier reading
+6. Reuses the staged output on later runs
 
-### Binary structure
+## Reverse-engineering tips
 
-```
-[Mach-O headers + Bun runtime]
-[__BUN segment, __bun section]
-  [8-byte header]
-  [modules data: paths + contents interleaved]
-  [modules metadata: 52 bytes per module]
-  [32-byte footer fields]
-  [16-byte trailer: "\n---- Bun! ----\n"]
-```
-
-## Limitations
-
-- **macOS only.** The extractor uses `otool` and assumes a Mach-O binary. Linux builds use ELF and would need a different section-parsing approach.
-- **Minified source.** Variable names are mangled (single letters like `T`, `R`, `A`). String literals and function names from dependencies are preserved, which makes searching by user-facing strings, flag names, and error messages effective.
-- **No source maps.** The bundled source has no mapping back to the original TypeScript. You're reading the compiled output.
-- **Version-coupled.** The extraction depends on Bun's `StandaloneModuleGraph` binary format. If Bun changes its embedding format, the footer parsing may need updating.
-- **Large output.** The main `claude.js` file is ~520K lines prettified. Use grep/ripgrep rather than opening it in an editor.
-
-## Tips for reading the source
-
-- Search for **string literals** (error messages, CLI flag names, event type names like `"stream-json"`, `"assistant"`, `"result"`) to find relevant code paths.
-- **Function names from dependencies** are preserved (e.g., `randomUUID`, `getUint32`, `structuredClone`).
-- The code uses **CommonJS** (`require`, `module.exports`) wrapped in Bun's CJS shim.
-- Look for Zod schemas (`y.object`, `y.literal`, `y.union`) to find type/event definitions.
+- Search **string literals** first: user-visible messages, flag names, event types, config keys.
+- Search for protocol words like `assistant`, `result`, `tool_use`, `permission`, `stream`.
+- Use **grep/ripgrep** instead of opening huge files directly.
+- Once you find a hit, read around it to find parser logic, schemas, and handlers.
+- Expect bundled/minified code: identifiers may be short, but string literals are still your map.
 
 ## License
 
