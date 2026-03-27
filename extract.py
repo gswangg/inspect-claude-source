@@ -167,7 +167,7 @@ def find_bun_section_linux(binary_path: Path) -> tuple[int, int]:
     file_size = binary_path.stat().st_size
 
     with open(binary_path, "rb") as f:
-        read_size = min(file_size, 1024)
+        read_size = min(file_size, 65536)
         f.seek(file_size - read_size)
         tail = f.read(read_size)
 
@@ -289,17 +289,37 @@ def extract_modules(section: bytes, footer: dict) -> list[dict]:
 
 
 def strip_bytecode_prefix(contents: bytes) -> bytes:
-    """Strip the Bun bytecode/CJS wrapper prefix to get clean JS source."""
+    """Strip the Bun bytecode/CJS wrapper prefix and suffix to get clean JS source.
+
+    Bun wraps each module in:
+        (function(exports, require, module, __filename, __dirname) { <source> })
+    The opening wrapper is prefixed with bytecode; we strip both the prefix (including
+    the opening wrapper) and the trailing ')' that closes it, producing source that
+    matches the npm-published esbuild output.
+    """
     marker = b"(function(exports, require, module, __filename, __dirname) {"
     pos = contents.find(marker)
     if pos < 0:
         return contents
 
     js = contents[pos + len(marker) :]
+    # Skip any non-printable bytes after the wrapper opening
     i = 0
     while i < len(js) and js[i] < 32 and js[i] not in (9, 10, 13):
         i += 1
-    return js[i:]
+    js = js[i:]
+
+    # Strip the matching closing '})' from the CJS wrapper.
+    # The wrapper is: (function(...){ <body> })
+    # We already stripped past the opening '{', now strip the closing '}'.
+    # The ')' closes the outer '(' of the IIFE.
+    stripped = js.rstrip()
+    if stripped.endswith(b"})"):
+        js = stripped[:-2] + b"\n"
+    elif stripped.endswith(b")"):
+        js = stripped[:-1] + b"\n"
+
+    return js
 
 
 def fast_format(src: str) -> str:
@@ -312,14 +332,17 @@ def fast_format(src: str) -> str:
 
 
 def prettify_prettier(file_path: Path) -> bool:
-    """Run prettier on a JS file via bunx. Returns True on success."""
-    for cmd in ("bunx", os.path.expanduser("~/.bun/bin/bunx")):
+    """Run prettier on a JS file via npx/bunx. Returns True on success."""
+    for cmd in ("npx", "bunx", os.path.expanduser("~/.bun/bin/bunx")):
+        # Large files (>5MB) need more time
+        file_size = file_path.stat().st_size
+        timeout = max(120, file_size // 100_000)  # ~10s per MB, minimum 120s
         try:
             result = subprocess.run(
                 [cmd, "prettier", str(file_path), "--parser", "babel", "--write"],
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=timeout,
             )
             if result.returncode == 0:
                 return True
