@@ -167,15 +167,23 @@ def find_bun_section_linux(binary_path: Path) -> tuple[int, int]:
     file_size = binary_path.stat().st_size
 
     with open(binary_path, "rb") as f:
-        read_size = min(file_size, 65536)
-        f.seek(file_size - read_size)
-        tail = f.read(read_size)
-
-        trailer_idx = tail.rfind(BUN_TRAILER)
-        if trailer_idx < 0:
+        # The Bun trailer is normally near EOF, but some builds append extra
+        # ELF section data (~100KB on aarch64) after it. Expand the search
+        # window progressively until we find the trailer or exhaust the file.
+        trailer_abs = -1
+        for read_size in (65536, 1024 * 1024, 16 * 1024 * 1024, file_size):
+            read_size = min(file_size, read_size)
+            f.seek(file_size - read_size)
+            tail = f.read(read_size)
+            trailer_idx = tail.rfind(BUN_TRAILER)
+            if trailer_idx >= 0:
+                trailer_abs = (file_size - read_size) + trailer_idx
+                break
+            if read_size >= file_size:
+                break
+        if trailer_abs < 0:
             sys.exit("Bun trailer not found in binary")
 
-        trailer_abs = (file_size - read_size) + trailer_idx
         section_end = trailer_abs + len(BUN_TRAILER)
 
         f.seek(trailer_abs - 32)
