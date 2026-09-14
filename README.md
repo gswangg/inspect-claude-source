@@ -46,10 +46,11 @@ Files are written to:
 <output-dir>/<version>/
 ```
 
-Primary file:
+Where the code lives depends on the install type:
 
 ```text
-<output-dir>/<version>/src/entrypoints/cli.js
+npm bundle:  <output-dir>/<version>/src/entrypoints/cli.js
+Bun build:   <output-dir>/<version>/chunk-*.js   (the `cli.js` beside them is only an import stub)
 ```
 
 For npm-installed bundles, the staged output may also include:
@@ -60,7 +61,7 @@ For npm-installed bundles, the staged output may also include:
 - `vendor/`
 - `INSTALL_ROOT.txt`
 
-For Bun-compiled builds, extracted modules are written under their embedded paths.
+For Bun-compiled builds, modules are written flat under their embedded paths: the entry stub, ~1500 `chunk-*.js` code modules, and the docs and assets the binary bundles. Bytecode-compiled modules carry a short binary stub before their source; the extractor strips it so every module is plain text.
 
 ## As a Claude Code skill
 
@@ -83,7 +84,7 @@ Claude will resolve the current install, extract or stage the source if needed, 
 1. Resolves `claude` from `PATH` by default
 2. Detects the Claude Code version from package metadata when possible
 3. If the install is a readable `cli.js` bundle, stages it directly to `/tmp/claude-source/<version>/src/entrypoints/cli.js`
-4. If the install is a Bun-compiled binary, parses the embedded `StandaloneModuleGraph` and extracts modules
+4. If the install is a Bun-compiled binary, parses the embedded `StandaloneModuleGraph`, extracts modules flat, and strips the bytecode stub from each
 5. Formats the resulting JS for easier reading by default using fast newline insertion, or prettier with `--pretty`
 6. Reuses the staged output on later runs
 
