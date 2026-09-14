@@ -6,7 +6,9 @@ Supports two install layouts:
 2. npm-installed bundled cli.js files (stage the readable JS bundle directly)
 
 Output:
-    <output-dir>/<version>/src/entrypoints/cli.js
+    npm bundle: <output-dir>/<version>/src/entrypoints/cli.js
+    Bun build:  <output-dir>/<version>/<module path> -- a small `cli.js` entry
+                stub plus the `chunk-*.js` modules that hold the code
 """
 
 from __future__ import annotations
@@ -297,18 +299,21 @@ def extract_modules(section: bytes, footer: dict) -> list[dict]:
 
 
 def strip_bytecode_prefix(contents: bytes) -> bytes:
-    """Strip the Bun bytecode/CJS wrapper prefix and suffix to get clean JS source.
+    """Strip Bun's bytecode stub so the module is clean JS text.
 
-    Bun wraps each module in:
-        (function(exports, require, module, __filename, __dirname) { <source> })
-    The opening wrapper is prefixed with bytecode; we strip both the prefix (including
-    the opening wrapper) and the trailing ')' that closes it, producing source that
-    matches the npm-published esbuild output.
+    Bytecode-compiled modules keep their source after a short binary stub that
+    ends in NUL. Two shapes exist:
+      - CJS wrapper: ``(function(exports, require, module, __filename, __dirname) {``
+        preceded by bytecode; strip the prefix, the wrapper, and its closing ``})``.
+      - ESM stub: a few bytes such as ``,Mxr};\\n\\x00`` (or a run of NULs) right
+        before the ``// @bun @bytecode`` header; strip through the last NUL.
+    A leftover NUL makes ``grep -I`` treat the whole module as binary.
     """
     marker = b"(function(exports, require, module, __filename, __dirname) {"
     pos = contents.find(marker)
     if pos < 0:
-        return contents
+        nul = contents[:64].rfind(b"\x00")
+        return contents[nul + 1 :] if nul >= 0 else contents
 
     js = contents[pos + len(marker) :]
     # Skip any non-printable bytes after the wrapper opening
@@ -498,8 +503,9 @@ def main():
             print("  done")
 
     elapsed = time.time() - t_start
-    print(f"\nExtracted to: {out_dir}")
-    print(f"Main source: {out_dir}/src/entrypoints/cli.js")
+    print(f"\nExtracted to: {out_dir}  ({len(text_modules)} text modules)")
+    if any(m["path"] in ("cli", "cli.js") for m in modules):
+        print(f"Entry module: {out_dir}/cli.js (an import stub; the code is in {out_dir}/chunk-*.js)")
     print(f"Completed in {elapsed:.1f}s")
 
 

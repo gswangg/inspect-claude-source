@@ -23,7 +23,7 @@ python3 ~/.claude/skills/inspect-claude-source/extract.py --print-binary
 
 ## Step 2: Extract or stage source (if not already done)
 
-Check if `/tmp/claude-source/$VERSION/src/entrypoints/cli.js` exists. If not, run the extraction script bundled with this skill:
+Check if `/tmp/claude-source/$VERSION/` exists. If not, run the extraction script bundled with this skill:
 
 ```bash
 python3 ~/.claude/skills/inspect-claude-source/extract.py --text-only
@@ -33,10 +33,9 @@ The script auto-detects the install type and:
 1. Resolves `claude` from `PATH` by default (or uses `--binary PATH`)
 2. Detects the installed version from Claude Code package metadata when available
 3. If Claude is a bundled `cli.js`, stages it directly to `/tmp/claude-source/<version>/src/entrypoints/cli.js`
-4. If Claude is a Bun-compiled binary, locates the embedded Bun module graph and extracts modules
+4. If Claude is a Bun-compiled binary, extracts the embedded module graph flat into `/tmp/claude-source/<version>/`: a small `cli.js` entry stub, ~1500 `chunk-*.js` modules holding the code, and bundled docs/assets
 5. Formats the resulting JS for easier reading by default using fast newline insertion, or prettier with `--pretty`
-6. Saves everything to `/tmp/claude-source/<version>/`
-7. Skips work if that version is already present
+6. Skips work if that version is already present
 
 Options:
 - `--text-only` - skip binary modules (`.node`, `.wasm`) when extracting Bun builds
@@ -48,19 +47,25 @@ Options:
 
 ## Step 3: Search or read the source
 
-The main source file is:
+Where the code lives depends on the install type:
 
 ```text
-/tmp/claude-source/<version>/src/entrypoints/cli.js
+npm bundle:  /tmp/claude-source/<version>/src/entrypoints/cli.js
+Bun build:   /tmp/claude-source/<version>/chunk-*.js   (cli.js there is only an import stub)
 ```
 
-If the user provided a search term (`$ARGUMENTS`), search for it:
+If the user provided a search term (`$ARGUMENTS`), search the whole version directory:
 
 ```bash
-grep -n "$ARGUMENTS" /tmp/claude-source/$VERSION/src/entrypoints/cli.js | head -50
+grep -rn "$ARGUMENTS" /tmp/claude-source/$VERSION/ | head -50
 ```
 
 For broader exploration, use Grep/Glob/Read against `/tmp/claude-source/<version>/`.
+
+Bun-build gotchas:
+- Minified local names are per chunk: the same short identifier can name unrelated things in two chunks. Trace a symbol through the chunk's `import{...}from"/$bunfs/root/chunk-....js"` block, not by name alone.
+- A function may be defined after its first use in the same chunk (hoisting), so search the whole file for `function <name>(`.
+- If a search returns nothing on a file that clearly has text, retry with `grep -a` or `command grep` — Claude Code's own shell `grep` skips files it classifies as binary.
 
 ## Tips for reverse engineering Claude Code features
 
